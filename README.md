@@ -1,6 +1,8 @@
 # eWaterCycle plugin for LISFLOOD hydrological model
 
 [![Research Software Directory Badge](https://img.shields.io/badge/rsd-00a3e3.svg)](https://www.research-software.nl/software/ewatercycle-lisflood)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.8413757.svg)](https://doi.org/10.5281/zenodo.8413757)
+[![PyPI](https://img.shields.io/pypi/v/ewatercycle-lisflood)](https://pypi.org/project/ewatercycle-lisflood/)
 
 LISFLOOD plugin for [eWatercycle](https://ewatercycle.readthedocs.io/).
 

@@ -36,3 +36,6 @@ Lisflood = "ewatercycle_lisflood.model:Lisflood"
 LisfloodForcing = "ewatercycle_lisflood.forcing:LisfloodForcing"
 [project.entry-points."ewatercycle.parameter_sets"]
 lisflood_fraser = "ewatercycle_lisflood.parameter_sets:lisflood_fraser"
+
+[project.urls]
+homepage = "https://github.com/eWaterCycle/ewatercycle-lisflood/"
