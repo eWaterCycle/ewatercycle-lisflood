@@ -31,6 +31,6 @@ dynamic = ["version"]
 
 # This registers the plugin such that it is discoverable by eWaterCycle
 [project.entry-points."ewatercycle.models"]
-Hype = "ewatercycle_hype.model:Hype"
+Lisflood = "ewatercycle_hype.model:Lisflood"
 [project.entry-points."ewatercycle.forcings"]
-HypeForcing = "ewatercycle_hype.forcing:HypeForcing"
+LisfloodForcing = "ewatercycle_hype.forcing:LisfloodForcing"

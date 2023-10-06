@@ -1,407 +1,342 @@
+import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
-from textwrap import dedent
 from unittest.mock import patch
 
 import numpy as np
 import pytest
 from grpc4bmi.bmi_client_apptainer import BmiClientApptainer
 from grpc4bmi.bmi_optionaldest import OptionalDestBmi
+from numpy.testing import assert_array_equal
+from pytest import TempPathFactory
 
 from ewatercycle import CFG
 from ewatercycle.base.parameter_set import ParameterSet
 from ewatercycle.forcing import sources
-from ewatercycle_hype.model import Hype, _set_code_in_cfg
+from ewatercycle.parameter_sets import example_parameter_sets
+from ewatercycle.plugins.lisflood.config import XmlConfig
+from ewatercycle.plugins.lisflood.forcing import LisfloodForcing
+from ewatercycle.plugins.lisflood.model import Lisflood
 from ewatercycle.testing.fake_models import FailingModel
 
-HypeForcing = sources["HypeForcing"]
 
-
-@pytest.fixture
-def mocked_config(tmp_path):
+@pytest.fixture(scope="session")
+def mocked_config(tmp_path_factory: TempPathFactory):
+    tmp_path = tmp_path_factory.mktemp("output_dir")
     CFG.output_dir = tmp_path
     CFG.container_engine = "apptainer"
     CFG.apptainer_dir = tmp_path
     CFG.parameter_sets = {}
     CFG.parameterset_dir = tmp_path
-    return CFG
 
 
-@pytest.fixture
-def parameter_set(mocked_config):
-    # Contents copied/inspired by demo.zip at https://sourceforge.net/projects/hype/files/release_hype_5_6_2/
-    directory = mocked_config.parameterset_dir / "hype_testcase"
-    directory.mkdir(parents=True)
-    config = directory / "info.txt"
-    # write info.txt
-    config.write_text(
-        dedent(
-            """\
-                !!Information om k�rningen.
-                bdate      1961-01-01
-                cdate      1962-01-01
-                edate      1963-12-31
-                substance N P
-                readobsid n
-                !!basinoutput
-                basinoutput variable prec temp cout ccIN ccON ccSP ccPP
-                basinoutput subbasin 609
-                basinoutput meanperiod   1
-                basinoutput decimals 7
-                !!mapoutput
-                mapoutput variable cTNl cTPl prec ccTN ccTP
-                mapoutput meanperiod  5
-                mapoutput decimals 3
-                !!timeoutput
-                timeoutput variable   prec temp crun
-                timeoutput meanperiod 3
-                timeoutput decimals 2
-            """
-        )
-    )
-
-    # write some parameter file
-    geodata = directory / "GeoData.txt"
-    geodata.write_text(
-        dedent(
-            """NAME	SUBID	MAINDOWN	X	Y	AREA	ROWNR	ELEV_MEAN	SLOPE_MEAN	REGION	LAKEREGION	parreg	SLC_1	SLC_2	SLC_3	SLC_4	SLC_5	SLC_6	SLC_7	SLC_8	SLC_9	SLC_10	SLC_11	SLC_12	SLC_13	SLC_14	SLC_15	SLC_16	SLC_17	lake_depth	LAKEDATAID	wetdep_n	drydep_n1	drydep_n2	drydep_n3	RIVLEN	Icatch	close_w	buffer
-        subareaname	609	0	6442230	1554840	5600000	1	11.1	0.031	80	5	2	0	0.117	0	0	00	0	0.125	0	0	0	0.754	0	0	0	0	0.004	3.3	0	540	0.7	1.1	0.4	2366.4	0.33	0.29	0.08
-        """
-        )
-    )
-    return ParameterSet(
-        name="hype_testcase",
-        directory=str(directory),
-        config=str(config),
-        target_model="hype",
-    )
+def find_values_in_xml(tree, name):
+    values = []
+    for textvar in tree.iter("textvar"):
+        textvar_name = textvar.attrib["name"]
+        if textvar_name == name:
+            values.append(textvar.get("value"))
+    return set(values)
 
 
-class TestWithOnlyParameterSetAndDefaults:
-    @pytest.fixture
-    def model(self, parameter_set):
-        return Hype(parameter_set=parameter_set)
+# TODO the download can take a long time (> 4 minutes)
+# as it downloads over 500Mb
+# we could make it quicker by creating
+# a fake parameter set and forcing,
+# but then how do we make sure the fakes are correct?
+@pytest.mark.skip("Too slow")
+class TestLFlatlonUseCase:
+    @pytest.fixture(scope="session")
+    def parameterset(self, mocked_config):
+        example_parameter_set = example_parameter_sets()["lisflood_fraser"]
+        example_parameter_set.download(CFG.parameterset_dir)
+        # example_parameter_set.to_config()
+        return example_parameter_set
 
     @pytest.fixture
-    def model_with_setup(self, mocked_config, model: Hype):
-        with (
-            patch.object(
-                BmiClientApptainer, "__init__", return_value=None
-            ) as mocked_constructor,
-            patch("datetime.datetime") as mocked_datetime,
-        ):
-            mocked_datetime.now.return_value = datetime(2021, 1, 2, 3, 4, 5)
-            config_file, config_dir = model.setup()
-        return config_file, config_dir, mocked_constructor, model
+    def generate_forcing(self, tmp_path, parameterset: ParameterSet):
+        forcing_dir = tmp_path / "forcing"
+        forcing_dir.mkdir()
+        meteo_dir = Path(parameterset.directory) / "meteo"
+        # Create the case where forcing data are not part of parameter_set
+        for file in meteo_dir.glob("*.nc"):
+            shutil.copy(file, forcing_dir / f"my{file.stem}.nc")
 
-    def test_setup_container(self, model_with_setup, tmp_path):
-        mocked_constructor = model_with_setup[2]
-        mocked_constructor.assert_called_once_with(
-            image="ewatercycle-hype-grpc4bmi_feb2021.sif",
-            work_dir=f"{tmp_path}/hype_20210102_030405",
-            input_dirs=[f"{tmp_path}/hype_testcase"],
-            timeout=300,
-            delay=0,
+        return LisfloodForcing(
+            forcing="lisflood",
+            directory=str(forcing_dir),
+            start_time="1986-01-02T00:00:00Z",
+            end_time="2018-01-02T00:00:00Z",
+            PrefixPrecipitation="mytp.nc",
+            PrefixTavg="myta.nc",
+            PrefixE0="mye0.nc",
         )
 
-    def test_setup_parameter_set_files(self, model_with_setup):
-        geodata = model_with_setup[3].parameter_set.directory / "GeoData.txt"
-        assert "subareaname" in geodata.read_text()
+    @pytest.fixture
+    def model(self, parameterset: ParameterSet, generate_forcing):
+        forcing = generate_forcing
+        m = Lisflood(parameter_set=parameterset, forcing=forcing)
+        yield m
 
-    def test_setup_config_file(self, model_with_setup):
-        config_file = model_with_setup[0]
-        expected = dedent(
-            """\
-                !!Information om k�rningen.
-                bdate      1961-01-01
-                cdate      1962-01-01
-                edate      1963-12-31
-                substance N P
-                readobsid n
-                !!basinoutput
-                basinoutput variable prec temp cout ccIN ccON ccSP ccPP
-                basinoutput subbasin 609
-                basinoutput meanperiod   1
-                basinoutput decimals 7
-                !!mapoutput
-                mapoutput variable cTNl cTPl prec ccTN ccTP
-                mapoutput meanperiod  5
-                mapoutput decimals 3
-                !!timeoutput
-                timeoutput variable   prec temp crun
-                timeoutput meanperiod 3
-                timeoutput decimals 2
-                resultdir ./
-        """
-        )
-        assert Path(config_file).read_text() == expected
-
-    def test_parameters(self, model):
-        expected = {
-            "start_time": "1961-01-01T00:00:00Z",
-            "end_time": "1963-12-31T00:00:00Z",
-            "crit_time": "1962-01-01T00:00:00Z",
+    def test_default_parameters(self, model: Lisflood):
+        expected_parameters = {
+            "IrrigationEfficiency": "0.75",
+            "MaskMap": "$(PathMaps)/masksmall.map",
+            "start_time": "1986-01-02T00:00:00Z",
+            "end_time": "2018-01-02T00:00:00Z",
         }.items()
-        assert model.parameters == expected
-
-    def test_get_value_as_xarray(self, model):
-        with pytest.raises(NotImplementedError):
-            model.get_value_as_xarray("comp outflow olake")
-
-    def test_get_value_at_coords(self, model):
-        class MockedBmi(FailingModel):
-            """Pretend to be a real BMI model."""
-
-            def get_var_grid(self, name):
-                return 1
-
-            def get_grid_x(self, grid_id, dest):
-                return np.array(
-                    [5.8953929, 4.9553967, 5.6387277]
-                )  # x subbasin lons of subbasinsin hype
-
-            def get_grid_y(self, grid_id, dest):
-                return np.array(
-                    [51.16437912, 50.21104813, 48.6910553]
-                )  # y are lats of subbasins in hype
-
-            def get_value_at_indices(self, name, dest, indices):
-                self.indices = indices
-                return np.array([13.0])
-
-            def get_var_type(self, name):
-                return "float64"
-
-            def get_var_itemsize(self, name):
-                return np.float64().size
-
-            def get_var_nbytes(self, name):
-                return np.float64().size * 3 * 3
-
-            def get_grid_rank(self, grid):
-                return 2
-
-            def get_grid_shape(self, grid, shape):
-                return (3, 3)
-
-            def get_grid_type(self, grid):
-                return "rectilinear"
-
-        model._bmi = OptionalDestBmi(MockedBmi())
-
-        actual = model.get_value_at_coords("comp outflow olake", lon=[5], lat=[50])
-        assert actual == np.array([13.0])
-        assert model.bmi.origin.indices == [1]
-
-
-class TestWithOnlyParameterSetAndFullSetup:
-    @pytest.fixture
-    def model(self, parameter_set):
-        return Hype(parameter_set=parameter_set)
+        assert model.parameters == expected_parameters
 
     @pytest.fixture
-    def model_with_setup(self, mocked_config, model: Hype, tmp_path):
+    def model_with_setup(self, mocked_config, model: Lisflood):
         with patch.object(
             BmiClientApptainer, "__init__", return_value=None
         ) as mocked_constructor, patch("datetime.datetime") as mocked_datetime:
             mocked_datetime.now.return_value = datetime(2021, 1, 2, 3, 4, 5)
             config_file, config_dir = model.setup(
-                start_time="2000-01-01T00:00:00Z",
-                end_time="2010-12-31T00:00:00Z",
-                crit_time="2002-01-01T00:00:00Z",
-                cfg_dir=str(tmp_path / "myworkdir"),
+                IrrigationEfficiency="0.8",
             )
-        return config_file, config_dir, mocked_constructor, model
+        return config_file, config_dir, mocked_constructor
 
-    def test_setup_container(self, model_with_setup, tmp_path):
-        mocked_constructor = model_with_setup[2]
+    def test_setup(self, model_with_setup, tmp_path):
+        config_file, config_dir, mocked_constructor = model_with_setup
+
+        # Check setup returns
+        expected_cfg_dir = CFG.output_dir / "lisflood_20210102_030405"
+        assert config_dir == str(expected_cfg_dir)
+        assert config_file == str(expected_cfg_dir / "lisflood_setting.xml")
+
+        # Check container started
         mocked_constructor.assert_called_once_with(
-            image="ewatercycle-hype-grpc4bmi_feb2021.sif",
-            work_dir=f"{tmp_path}/myworkdir",
-            input_dirs=[f"{tmp_path}/hype_testcase"],
+            image="ewatercycle-lisflood-grpc4bmi_20.10.sif",
+            work_dir=f"{CFG.output_dir}/lisflood_20210102_030405",
+            input_dirs=[
+                f"{CFG.parameterset_dir}/lisflood_fraser",
+                f"{tmp_path}/forcing",
+            ],
             timeout=300,
             delay=0,
         )
 
-    def test_setup_parameter_set_files(self, model_with_setup):
-        geodata = model_with_setup[3].parameter_set.directory / "GeoData.txt"
-        assert "subareaname" in geodata.read_text()
+        # Check content config file
+        _cfg = XmlConfig(str(config_file))
+        assert find_values_in_xml(_cfg.config, "CalendarDayStart") == {
+            "02/01/1986 00:00"
+        }
+        assert find_values_in_xml(_cfg.config, "StepStart") == {"1"}
+        assert find_values_in_xml(_cfg.config, "StepEnd") == {"11688"}
+        assert find_values_in_xml(_cfg.config, "PathMeteo") == {f"{tmp_path}/forcing"}
+        assert find_values_in_xml(_cfg.config, "PathOut") == {str(config_dir)}
+        assert find_values_in_xml(_cfg.config, "IrrigationEfficiency") == {"0.8"}
+        assert find_values_in_xml(_cfg.config, "MaskMap") == {
+            "$(PathMaps)/masksmall.map",
+            "$(MaskMap)",
+        }
+        assert find_values_in_xml(_cfg.config, "PrefixPrecipitation") == {"mytp"}
+        assert find_values_in_xml(_cfg.config, "PrefixTavg") == {"myta"}
+        assert find_values_in_xml(_cfg.config, "PrefixE0") == {"mye0"}
+        assert find_values_in_xml(_cfg.config, "PrefixES0") == {"es0"}
+        assert find_values_in_xml(_cfg.config, "PrefixET0") == {"et0"}
 
-    def test_setup_config_file(self, model_with_setup):
-        config_file = model_with_setup[0]
-        expected = dedent(
-            """\
-                !!Information om k�rningen.
-                bdate 2000-01-01 00:00:00
-                cdate 2002-01-01 00:00:00
-                edate 2010-12-31 00:00:00
-                substance N P
-                readobsid n
-                !!basinoutput
-                basinoutput variable prec temp cout ccIN ccON ccSP ccPP
-                basinoutput subbasin 609
-                basinoutput meanperiod   1
-                basinoutput decimals 7
-                !!mapoutput
-                mapoutput variable cTNl cTPl prec ccTN ccTP
-                mapoutput meanperiod  5
-                mapoutput decimals 3
-                !!timeoutput
-                timeoutput variable   prec temp crun
-                timeoutput meanperiod 3
-                timeoutput decimals 2
-                resultdir ./
-        """
-        )
-        assert Path(config_file).read_text() == expected
+    class TestGetValueAtCoords:
+        def test_get_value_at_coords_single(self, caplog, model: Lisflood):
+            model._bmi = OptionalDestBmi(MockedBmi())
 
-    def test_parameters(self, model_with_setup, model):
-        expected = {
-            "start_time": "2000-01-01T00:00:00Z",
-            "end_time": "2010-12-31T00:00:00Z",
-            "crit_time": "2002-01-01T00:00:00Z",
-        }.items()
-        assert model.parameters == expected
+            with caplog.at_level(logging.DEBUG):
+                result = model.get_value_at_coords(
+                    "Discharge", lon=[-124.35], lat=[52.93]
+                )
 
-
-def test_set_code_in_cfg():
-    content = dedent(
-        """\
-                !!Information om k�rningen.
-                bdate      1961-01-01
-                cdate      1962-01-01
-                edate      1963-12-31
-                substance N P
-                readobsid n
-                !!basinoutput
-                basinoutput variable prec temp cout ccIN ccON ccSP ccPP
-                basinoutput subbasin 609
-                basinoutput meanperiod   1
-                basinoutput decimals 7
-                !!mapoutput
-                mapoutput variable cTNl cTPl prec ccTN ccTP
-                mapoutput meanperiod  5
-                mapoutput decimals 3
-                !!timeoutput
-                timeoutput variable   prec temp crun
-                timeoutput meanperiod 3
-                timeoutput decimals 2
-            """
-    )
-
-    actual = _set_code_in_cfg(content, "bdate", "2000-05-06")
-
-    expected = dedent(
-        """\
-                !!Information om k�rningen.
-                bdate 2000-05-06
-                cdate      1962-01-01
-                edate      1963-12-31
-                substance N P
-                readobsid n
-                !!basinoutput
-                basinoutput variable prec temp cout ccIN ccON ccSP ccPP
-                basinoutput subbasin 609
-                basinoutput meanperiod   1
-                basinoutput decimals 7
-                !!mapoutput
-                mapoutput variable cTNl cTPl prec ccTN ccTP
-                mapoutput meanperiod  5
-                mapoutput decimals 3
-                !!timeoutput
-                timeoutput variable   prec temp crun
-                timeoutput meanperiod 3
-                timeoutput decimals 2
-            """
-    )
-    assert actual == expected
-
-
-class TestWithForcingAndDefaults:
-    @pytest.fixture
-    def forcing(self, tmp_path):
-        forcing_dir = tmp_path / "forcing"
-        forcing_dir.mkdir()
-        pobs = forcing_dir / "Pobs.txt"
-        pobs.write_text(
-            dedent(
-                """\
-            DATE	609
-            1986-01-02	0.6
-            """
+            msg = (
+                "Requested point was lon: -124.35, lat: 52.93;",
+                "closest grid point is -124.35, 52.95.",
             )
+
+            assert msg[0] in caplog.text
+            assert msg[1] in caplog.text
+            assert result == np.array([1.0])
+            assert model.bmi.origin.indices == [311]
+
+        def test_get_value_at_coords_multiple(self, model: Lisflood):
+            model._bmi = OptionalDestBmi(MockedBmi())
+            model.get_value_at_coords(
+                "Discharge",
+                lon=[-124.45, -124.35, -121.45],
+                lat=[53.95, 52.93, 52.65],
+            )
+            assert_array_equal(model.bmi.origin.indices, [0, 311, 433])
+
+        def test_get_value_at_coords_faraway(self, model: Lisflood):
+            model._bmi = OptionalDestBmi(MockedBmi())
+            with pytest.raises(ValueError) as excinfo:
+                model.get_value_at_coords("Discharge", lon=[0.0], lat=[0.0])
+            msg = str(excinfo.value)
+            assert "outside model grid." in msg
+
+    class TestCustomMaskMap:
+        @pytest.fixture
+        def model(self, tmp_path, parameterset: ParameterSet, generate_forcing):
+            # Create the case where mask map is not part of parameter_set
+            mask_dir = tmp_path / "custommask"
+            mask_dir.mkdir()
+            mask_file_in_ps = parameterset.directory / "maps/mask.map"
+            shutil.copy(mask_file_in_ps, mask_dir / "mask.map")
+            forcing = generate_forcing
+            m = Lisflood(parameter_set=parameterset, forcing=forcing)
+            yield m
+
+        @pytest.fixture
+        def model_with_setup(self, tmp_path, mocked_config, model: Lisflood):
+            with patch.object(
+                BmiClientApptainer, "__init__", return_value=None
+            ) as mocked_constructor, patch("datetime.datetime") as mocked_datetime:
+                mocked_datetime.now.return_value = datetime(2021, 1, 2, 3, 4, 5)
+                config_file, config_dir = model.setup(
+                    MaskMap=str(tmp_path / "custommask/mask.map")
+                )
+            return config_file, config_dir, mocked_constructor, model
+
+        def test_setup(self, model_with_setup, tmp_path):
+            config_file, config_dir, mocked_constructor, _ = model_with_setup
+
+            # Check setup returns
+            expected_cfg_dir = CFG.output_dir / "lisflood_20210102_030405"
+            assert config_dir == str(expected_cfg_dir)
+            assert config_file == str(expected_cfg_dir / "lisflood_setting.xml")
+
+            # Check container started
+            mocked_constructor.assert_called_once_with(
+                image="ewatercycle-lisflood-grpc4bmi_20.10.sif",
+                work_dir=f"{CFG.output_dir}/lisflood_20210102_030405",
+                input_dirs=[
+                    f"{tmp_path}/custommask",
+                    f"{CFG.parameterset_dir}/lisflood_fraser",
+                    f"{tmp_path}/forcing",
+                ],
+                timeout=300,
+                delay=0,
+            )
+
+            # Check content config file
+            _cfg = XmlConfig(str(config_file))
+            assert find_values_in_xml(_cfg.config, "CalendarDayStart") == {
+                "02/01/1986 00:00"
+            }
+            assert find_values_in_xml(_cfg.config, "StepStart") == {"1"}
+            assert find_values_in_xml(_cfg.config, "StepEnd") == {"11688"}
+            assert find_values_in_xml(_cfg.config, "PathMeteo") == {
+                f"{tmp_path}/forcing"
+            }
+            assert find_values_in_xml(_cfg.config, "PathOut") == {str(config_dir)}
+            assert find_values_in_xml(_cfg.config, "IrrigationEfficiency") == {
+                "0.75",
+                "$(IrrigationEfficiency)",
+            }
+            assert find_values_in_xml(_cfg.config, "MaskMap") == {
+                f"{tmp_path}/custommask/mask"
+            }
+            assert find_values_in_xml(_cfg.config, "PrefixPrecipitation") == {"mytp"}
+            assert find_values_in_xml(_cfg.config, "PrefixTavg") == {"myta"}
+            assert find_values_in_xml(_cfg.config, "PrefixE0") == {"mye0"}
+            assert find_values_in_xml(_cfg.config, "PrefixES0") == {"es0"}
+            assert find_values_in_xml(_cfg.config, "PrefixET0") == {"et0"}
+
+        @pytest.mark.skip(reason="Doesn't play nicely with new model API.")
+        def test_parameters_after_setup(self, model_with_setup, tmp_path):
+            expected_parameters = {
+                "IrrigationEfficiency": "0.75",
+                "MaskMap": f"{tmp_path}/custommask/mask",
+                "start_time": "1986-01-02T00:00:00Z",
+                "end_time": "2018-01-02T00:00:00Z",
+            }.items()
+            assert model_with_setup[3].parameters == expected_parameters
+
+
+class MockedBmi(FailingModel):
+    """Mimic a real use case with realistic shape and abitrary high precision."""
+
+    def get_var_grid(self, name):
+        return 0
+
+    def get_grid_shape(self, grid_id, dest):
+        return 14, 31  # shape returns (len(y), len(x))
+
+    def get_grid_x(self, grid_id, dest):
+        return np.array(
+            [
+                -124.450000000003,
+                -124.350000000003,
+                -124.250000000003,
+                -124.150000000003,
+                -124.050000000003,
+                -123.950000000003,
+                -123.850000000003,
+                -123.750000000003,
+                -123.650000000003,
+                -123.550000000003,
+                -123.450000000003,
+                -123.350000000003,
+                -123.250000000003,
+                -123.150000000003,
+                -123.050000000003,
+                -122.950000000003,
+                -122.850000000003,
+                -122.750000000003,
+                -122.650000000003,
+                -122.550000000003,
+                -122.450000000003,
+                -122.350000000003,
+                -122.250000000003,
+                -122.150000000003,
+                -122.050000000003,
+                -121.950000000003,
+                -121.850000000003,
+                -121.750000000003,
+                -121.650000000003,
+                -121.550000000003,
+                -121.450000000003,
+            ]
         )
-        return HypeForcing(
-            forcing="hype",
-            start_time="1986-01-02T00:00:00Z",
-            end_time="2018-01-02T00:00:00Z",
-            directory=str(forcing_dir),
-            Pobs=pobs.name,
+
+    def get_grid_y(self, grid_id, dest):
+        return np.array(
+            [
+                53.950000000002,
+                53.8500000000021,
+                53.7500000000021,
+                53.6500000000021,
+                53.5500000000021,
+                53.4500000000021,
+                53.3500000000021,
+                53.2500000000021,
+                53.1500000000021,
+                53.0500000000021,
+                52.9500000000021,
+                52.8500000000021,
+                52.7500000000021,
+                52.6500000000021,
+            ]
         )
 
-    @pytest.fixture
-    def model(self, parameter_set, forcing):
-        return Hype(parameter_set=parameter_set, forcing=forcing)
+    def get_grid_spacing(self, grid_id):
+        return 0.1, 0.1
 
-    @pytest.fixture
-    def model_with_setup(self, mocked_config, model: Hype):
-        with patch.object(
-            BmiClientApptainer, "__init__", return_value=None
-        ) as mocked_constructor, patch("datetime.datetime") as mocked_datetime:
-            mocked_datetime.now.return_value = datetime(2021, 1, 2, 3, 4, 5)
-            config_file, config_dir = model.setup()
-        return config_file, config_dir, mocked_constructor, model
+    def get_value_at_indices(self, name, dest, indices):
+        self.indices = indices
+        return np.array([1.0])
 
-    def test_setup_container(self, model_with_setup, tmp_path):
-        mocked_constructor = model_with_setup[2]
-        mocked_constructor.assert_called_once_with(
-            image="ewatercycle-hype-grpc4bmi_feb2021.sif",
-            work_dir=f"{tmp_path}/hype_20210102_030405",
-            input_dirs=[f"{tmp_path}/hype_testcase", f"{tmp_path}/forcing"],
-            timeout=300,
-            delay=0,
-        )
+    def get_var_type(self, name):
+        return "float64"
 
-    def test_setup_forcing_files(self, model_with_setup):
-        pobs = model_with_setup[3].forcing.directory / "Pobs.txt"
-        assert "DATE" in pobs.read_text()
+    def get_var_itemsize(self, name):
+        return np.float64().size
 
-    def test_setup_parameter_set_files(self, model_with_setup):
-        geodata = model_with_setup[3].parameter_set.directory / "GeoData.txt"
-        assert "subareaname" in geodata.read_text()
+    def get_var_nbytes(self, name):
+        return np.float64().size * 14 * 31
 
-    def test_setup_config_file(self, model_with_setup):
-        config_file = model_with_setup[0]
-        expected = dedent(
-            """\
-                !!Information om k�rningen.
-                bdate 1986-01-02 00:00:00
-                cdate 1986-01-02 00:00:00
-                edate 2018-01-02 00:00:00
-                substance N P
-                readobsid n
-                !!basinoutput
-                basinoutput variable prec temp cout ccIN ccON ccSP ccPP
-                basinoutput subbasin 609
-                basinoutput meanperiod   1
-                basinoutput decimals 7
-                !!mapoutput
-                mapoutput variable cTNl cTPl prec ccTN ccTP
-                mapoutput meanperiod  5
-                mapoutput decimals 3
-                !!timeoutput
-                timeoutput variable   prec temp crun
-                timeoutput meanperiod 3
-                timeoutput decimals 2
-                resultdir ./
-        """
-        )
-        assert Path(config_file).read_text() == expected
+    def get_grid_rank(self, grid):
+        return 2
 
-    def test_parameters(self, model):
-        expected = {
-            "start_time": "1986-01-02T00:00:00Z",
-            "end_time": "2018-01-02T00:00:00Z",
-            "crit_time": "1986-01-02T00:00:00Z",
-        }.items()
-        assert model.parameters == expected
+    def get_grid_type(self, grid):
+        return "rectilinear"

@@ -22,10 +22,10 @@ Install this package alongside your eWaterCycle installation
 pip install ewatercycle-hype
 ```
 
-Then Hype becomes available as one of the eWaterCycle models
+Then Lisflood becomes available as one of the eWaterCycle models
 
 ```python
-from ewatercycle.models import Hype
+from ewatercycle.models import Lisflood
 ```
 
 ## Usage
