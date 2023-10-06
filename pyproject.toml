@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/ewatercycle_hype/__init__.py"
+
+[project]
+name = "ewatercycle-hype"
+description = "eWaterCycle plugin for HYPE hydrological model"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [
+  { name = "Bart Schilperoort, Peter Kalverla, Stefan Verhoeven", email = "b.schilperoort@esciencecenter.nl" },
+]
+keywords = ["ewatercycle", "hydrology"]
+classifiers = [
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Natural Language :: English",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+# Include here only the dependencies for the eWaterCycle wrapped model
+dependencies = [
+  "ewatercycle>=2.0.0b2",
+]
+dynamic = ["version"]
+
+# This registers the plugin such that it is discoverable by eWaterCycle
+[project.entry-points."ewatercycle.models"]
+Hype = "ewatercycle_hype.model:Hype"
+[project.entry-points."ewatercycle.forcings"]
+HypeForcing = "ewatercycle_hype.forcing:HypeForcing"
