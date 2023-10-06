@@ -27,7 +27,7 @@ from typing import Dict, Tuple
 
 from ewatercycle import CFG
 from ewatercycle.container import ContainerEngine, ContainerImage
-from ewatercycle.plugins.lisflood.config import XmlConfig
+from ewatercycle_lisflood.config import XmlConfig
 from ewatercycle.util import get_time
 
 # TODO: get rid of this part.

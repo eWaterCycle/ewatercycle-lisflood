@@ -9,8 +9,8 @@ from pydantic import PrivateAttr, model_validator
 from ewatercycle.base.model import ISO_TIMEFMT, ContainerizedModel
 from ewatercycle.base.parameter_set import ParameterSet
 from ewatercycle.container import ContainerImage
-from ewatercycle.plugins.lisflood.config import XmlConfig
-from ewatercycle.plugins.lisflood.forcing import LisfloodForcing
+from ewatercycle_lisflood.config import XmlConfig
+from ewatercycle_lisflood.forcing import LisfloodForcing
 from ewatercycle.util import get_time, to_absolute_path
 
 logger = logging.getLogger(__name__)

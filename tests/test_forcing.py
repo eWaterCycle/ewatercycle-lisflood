@@ -9,7 +9,7 @@ from esmvalcore.experimental.recipe_info import RecipeInfo
 from esmvalcore.experimental.recipe_output import DataFile, RecipeOutput
 
 from ewatercycle.base.forcing import FORCING_YAML
-from ewatercycle.plugins.lisflood.forcing import LisfloodForcing, build_lisflood_recipe
+from ewatercycle_lisflood.forcing import LisfloodForcing, build_lisflood_recipe
 from ewatercycle.testing.helpers import reyamlify
 
 
