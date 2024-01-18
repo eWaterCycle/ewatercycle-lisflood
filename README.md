@@ -6,7 +6,7 @@
 
 LISFLOOD plugin for [eWatercycle](https://ewatercycle.readthedocs.io/).
 
-LISFLOOD documentation at http://www.smhi.net/lisflood/wiki/doku.php .
+LISFLOOD documentation [here](https://ec-jrc.github.io/lisflood-model/).
 
 ## Installation
 
