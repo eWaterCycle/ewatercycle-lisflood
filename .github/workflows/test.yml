@@ -9,19 +9,16 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.10"]
-      fail-fast: false
-    name: Run tests in mamba environment ${{ matrix.python-version }}
+    name: Run tests in mamba environment
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Download mamba environment.yml
         run:
-          wget https://raw.githubusercontent.com/eWaterCycle/ewatercycle/main/environment.yml
+          wget https://raw.githubusercontent.com/eWaterCycle/ewatercycle/main/conda-lock.yml
       - uses: mamba-org/setup-micromamba@v1
         with:
-          environment-file: environment.yml
+          environment-file: conda-lock.yml
+          environment-name: ci
           cache-environment: true
           init-shell: bash
       - name: Install dependencies

@@ -25,7 +25,7 @@ classifiers = [
 
 # Include here only the dependencies for the eWaterCycle wrapped model
 dependencies = [
-  "ewatercycle>=2.0.0b2",
+  "ewatercycle>=2.3.1",
 ]
 dynamic = ["version"]
 

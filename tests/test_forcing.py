@@ -101,6 +101,8 @@ class TestGenerateForcingWithoutLisvap:
             """\
         start_time: '1989-01-02T00:00:00Z'
         end_time: '1999-01-02T00:00:00Z'
+        shape: Rhine.shp
+        filenames: {}
         PrefixPrecipitation: lisflood_pr.nc
         PrefixTavg: lisflood_tas.nc
         PrefixE0: e0.nc
@@ -113,8 +115,7 @@ class TestGenerateForcingWithoutLisvap:
 
     def test_saved_yaml(self, forcing, tmp_path):
         saved_forcing = LisfloodForcing.load(tmp_path)
-        # shape should is not included in the yaml file
-        forcing.shape = None
+        forcing.shape = forcing.directory / "Rhine.shp"
 
         assert forcing == saved_forcing
 
